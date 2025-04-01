@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"database/sql"
 	"embed"
 	"fmt"
 	"log"
@@ -18,11 +19,11 @@ import (
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/services"
 	"github.com/dustin/go-humanize"
 	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/basicauth"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/filesystem"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/template/html/v2"
+	"github.com/google/uuid"
 	_ "github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/spf13/cobra"
@@ -92,6 +93,14 @@ func initEnvConfig() {
 	}
 	if envChatStorage := viper.GetBool("WHATSAPP_CHAT_STORAGE"); !envChatStorage {
 		config.WhatsappChatStorage = envChatStorage
+	}
+
+	// Admin settings
+	if envAdminUsername := viper.GetString("ADMIN_USERNAME"); envAdminUsername != "" {
+		config.AdminUsername = envAdminUsername
+	}
+	if envAdminPassword := viper.GetString("ADMIN_PASSWORD"); envAdminPassword != "" {
+		config.AdminPassword = envAdminPassword
 	}
 }
 
@@ -170,6 +179,20 @@ func initFlags() {
 		config.WhatsappChatStorage,
 		`enable or disable chat storage --chat-storage <true/false>. If you disable this, reply feature maybe not working properly | example: --chat-storage=true`,
 	)
+
+	// Admin flags
+	rootCmd.PersistentFlags().StringVarP(
+		&config.AdminUsername,
+		"admin-username", "",
+		config.AdminUsername,
+		`admin username for master dashboard --admin-username <string> | example: --admin-username="admin"`,
+	)
+	rootCmd.PersistentFlags().StringVarP(
+		&config.AdminPassword,
+		"admin-password", "",
+		config.AdminPassword,
+		`admin password for master dashboard --admin-password <string> | example: --admin-password="secret"`,
+	)
 }
 
 func runRest(_ *cobra.Command, _ []string) {
@@ -212,34 +235,42 @@ func runRest(_ *cobra.Command, _ []string) {
 	}
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: "*",
-		AllowHeaders: "Origin, Content-Type, Accept",
+		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
 	}))
 
-	if len(config.AppBasicAuthCredential) > 0 {
-		account := make(map[string]string)
-		for _, basicAuth := range config.AppBasicAuthCredential {
-			ba := strings.Split(basicAuth, ":")
-			if len(ba) != 2 {
-				log.Fatalln("Basic auth is not valid, please this following format <user>:<secret>")
-			}
-			account[ba[0]] = ba[1]
-		}
+	// Initialize database connection
+	db, err := sql.Open(getDBDriver(), config.DBURI)
+	if err != nil {
+		log.Fatalln("Failed to connect to database:", err)
+	}
+	defer db.Close()
 
-		app.Use(basicauth.New(basicauth.Config{
-			Users: account,
-		}))
+	// Run migrations
+	if err := runMigrations(db); err != nil {
+		log.Fatalln("Failed to run migrations:", err)
 	}
 
-	db := whatsapp.InitWaDB()
-	cli := whatsapp.InitWaCLI(db)
+	// Initialize WhatsApp database and client
+	dbContainer := whatsapp.InitWaDB()
+	cli := whatsapp.InitWaCLI(dbContainer)
+	whatsappManager := services.GetWhatsAppManager()
 
 	// Service
-	appService := services.NewAppService(cli, db)
+	appService := services.NewAppService(cli, dbContainer)
 	sendService := services.NewSendService(cli, appService)
 	userService := services.NewUserService(cli)
 	messageService := services.NewMessageService(cli)
 	groupService := services.NewGroupService(cli)
 	newsletterService := services.NewNewsletterService(cli)
+	adminService := services.NewAdminService(db)
+
+	// Set admin service in middleware
+	middleware.SetAdminService(adminService)
+
+	// Initialize all active connections
+	if err := initializeConnections(db, whatsappManager); err != nil {
+		log.Printf("Warning: Failed to initialize some connections: %v", err)
+	}
 
 	// Rest
 	rest.InitRestApp(app, appService)
@@ -248,14 +279,43 @@ func runRest(_ *cobra.Command, _ []string) {
 	rest.InitRestMessage(app, messageService)
 	rest.InitRestGroup(app, groupService)
 	rest.InitRestNewsletter(app, newsletterService)
+	rest.InitRestAdmin(app, adminService)
 
-	app.Get("/", func(c *fiber.Ctx) error {
-		return c.Render("views/index", fiber.Map{
+	// Admin routes with authentication
+	admin := app.Group("/admin")
+	admin.Use(middleware.AdminAuth())
+	admin.Get("/", func(c *fiber.Ctx) error {
+		return c.Render("views/admin/index", fiber.Map{
 			"AppHost":        fmt.Sprintf("%s://%s", c.Protocol(), c.Hostname()),
 			"AppVersion":     config.AppVersion,
 			"BasicAuthToken": c.UserContext().Value(middleware.AuthorizationValue("BASIC_AUTH")),
+		})
+	})
+
+	// Admin login page (no auth required)
+	app.Get("/admin/login", func(c *fiber.Ctx) error {
+		return c.Render("views/admin/login", fiber.Map{})
+	})
+
+	// Company dashboard route
+	app.Get("/:companyId", func(c *fiber.Ctx) error {
+		companyId := c.Params("companyId")
+		token := c.UserContext().Value(middleware.AuthorizationValue("BASIC_AUTH")).(string)
+
+		// Verify company exists and user has access
+		if !adminService.VerifyCompanyAccess(companyId, token) {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+				"error": "Unauthorized",
+			})
+		}
+
+		return c.Render("views/index", fiber.Map{
+			"AppHost":        fmt.Sprintf("%s://%s", c.Protocol(), c.Hostname()),
+			"AppVersion":     config.AppVersion,
+			"BasicAuthToken": token,
 			"MaxFileSize":    humanize.Bytes(uint64(config.WhatsappSettingMaxFileSize)),
 			"MaxVideoSize":   humanize.Bytes(uint64(config.WhatsappSettingMaxVideoSize)),
+			"CompanyId":      companyId,
 		})
 	})
 
@@ -274,6 +334,81 @@ func runRest(_ *cobra.Command, _ []string) {
 	if err = app.Listen(":" + config.AppPort); err != nil {
 		log.Fatalln("Failed to start: ", err.Error())
 	}
+}
+
+// getDBDriver returns the appropriate database driver based on the URI
+func getDBDriver() string {
+	if strings.HasPrefix(config.DBURI, "file:") {
+		return "sqlite3"
+	} else if strings.HasPrefix(config.DBURI, "postgres:") {
+		return "postgres"
+	}
+	return "sqlite3" // default to sqlite3
+}
+
+// runMigrations executes database migrations
+func runMigrations(db *sql.DB) error {
+	// Read and execute migration files
+	migrationFiles := []string{
+		"src/database/migrations/001_create_companies_and_connections.sql",
+	}
+
+	for _, file := range migrationFiles {
+		content, err := os.ReadFile(file)
+		if err != nil {
+			return fmt.Errorf("failed to read migration file %s: %v", file, err)
+		}
+
+		_, err = db.Exec(string(content))
+		if err != nil {
+			return fmt.Errorf("failed to execute migration %s: %v", file, err)
+		}
+	}
+
+	return nil
+}
+
+// initializeConnections initializes all active WhatsApp connections
+func initializeConnections(db *sql.DB, manager *services.WhatsAppManager) error {
+	rows, err := db.Query(`
+		SELECT c.user_id, c.token, comp.api_key 
+		FROM connections c 
+		JOIN companies comp ON c.company_id = comp.id 
+		WHERE c.status = 'connected'
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to query active connections: %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var userID, token, apiKey string
+		if err := rows.Scan(&userID, &token, &apiKey); err != nil {
+			log.Printf("Error scanning connection row: %v", err)
+			continue
+		}
+
+		// Convert userID to UUID
+		userUUID, err := uuid.Parse(userID)
+		if err != nil {
+			log.Printf("Error parsing userID as UUID: %v", err)
+			continue
+		}
+
+		// Get or create WhatsApp client instance
+		if _, exists := manager.GetInstance(userUUID); !exists {
+			// Here you would need to create a new client instance
+			// This depends on your WhatsApp client initialization logic
+			continue
+		}
+
+		// Update connection status
+		if _, err := db.Exec("UPDATE connections SET status = 'connected' WHERE user_id = $1", userID); err != nil {
+			log.Printf("Failed to update connection status for user %s: %v", userID, err)
+		}
+	}
+
+	return nil
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.

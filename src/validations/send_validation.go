@@ -74,7 +74,7 @@ func ValidateSendFile(ctx context.Context, request domainSend.FileRequest) error
 		return pkgError.ValidationError(err.Error())
 	}
 
-	if request.File.Size > config.WhatsappSettingMaxFileSize { // 10MB
+	if request.File.Size > int64(config.WhatsappSettingMaxFileSize) { // 10MB
 		maxSizeString := humanize.Bytes(uint64(config.WhatsappSettingMaxFileSize))
 		return pkgError.ValidationError(fmt.Sprintf("max file upload is %s, please upload in cloud and send via text if your file is higher than %s", maxSizeString, maxSizeString))
 	}
@@ -102,7 +102,7 @@ func ValidateSendVideo(ctx context.Context, request domainSend.VideoRequest) err
 		return pkgError.ValidationError("your video type is not allowed. please use mp4/mkv/avi")
 	}
 
-	if request.Video.Size > config.WhatsappSettingMaxVideoSize { // 30MB
+	if request.Video.Size > int64(config.WhatsappSettingMaxVideoSize) { // 30MB
 		maxSizeString := humanize.Bytes(uint64(config.WhatsappSettingMaxVideoSize))
 		return pkgError.ValidationError(fmt.Sprintf("max video upload is %s, please upload in cloud and send via text if your file is higher than %s", maxSizeString, maxSizeString))
 	}
