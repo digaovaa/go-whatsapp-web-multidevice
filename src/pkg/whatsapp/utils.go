@@ -23,7 +23,7 @@ import (
 )
 
 // ExtractMedia is a helper function to extract media from whatsapp
-func ExtractMedia(storageLocation string, mediaFile whatsmeow.DownloadableMessage) (extractedMedia ExtractedMedia, err error) {
+func ExtractMedia(storageLocation string, mediaFile whatsmeow.DownloadableMessage, cli *whatsmeow.Client) (extractedMedia ExtractedMedia, err error) {
 	if mediaFile == nil {
 		logrus.Info("Skip download because data is nil")
 		return extractedMedia, nil
@@ -195,7 +195,7 @@ func isGroupJid(jid string) bool {
 }
 
 // isFromMySelf is a helper function to check if the message is from my self (logged in account)
-func isFromMySelf(jid string) bool {
+func isFromMySelf(jid string, cli *whatsmeow.Client) bool {
 	return extractPhoneNumber(jid) == extractPhoneNumber(cli.Store.ID.String())
 }
 

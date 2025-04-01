@@ -14,7 +14,7 @@ import (
 )
 
 // forwardToWebhook is a helper function to forward event to webhook url
-func forwardToWebhook(evt *events.Message) error {
+func forwardToWebhook(evt *events.Message, userID int64) error {
 	logrus.Info("Forwarding event to webhook:", config.WhatsappWebhook)
 	payload, err := createPayload(evt)
 	if err != nil {
@@ -61,7 +61,7 @@ func createPayload(evt *events.Message) (map[string]interface{}, error) {
 	}
 
 	if audioMedia := evt.Message.GetAudioMessage(); audioMedia != nil {
-		path, err := ExtractMedia(config.PathMedia, audioMedia)
+		path, err := ExtractMedia(config.PathMedia, audioMedia, GetInstanceManager().GetFirstInstance().Client)
 		if err != nil {
 			logrus.Errorf("Failed to download audio from %s: %v", evt.Info.SourceString(), err)
 			return nil, pkgError.WebhookError(fmt.Sprintf("Failed to download audio: %v", err))
@@ -73,8 +73,8 @@ func createPayload(evt *events.Message) (map[string]interface{}, error) {
 		body["contact"] = contactMessage
 	}
 
-	if documentMedia := evt.Message.GetDocumentMessage(); documentMedia != nil {
-		path, err := ExtractMedia(config.PathMedia, documentMedia)
+	if documentMessage := evt.Message.GetDocumentMessage(); documentMessage != nil {
+		path, err := ExtractMedia(config.PathMedia, documentMessage, GetInstanceManager().GetFirstInstance().Client)
 		if err != nil {
 			logrus.Errorf("Failed to download document from %s: %v", evt.Info.SourceString(), err)
 			return nil, pkgError.WebhookError(fmt.Sprintf("Failed to download document: %v", err))
@@ -82,8 +82,8 @@ func createPayload(evt *events.Message) (map[string]interface{}, error) {
 		body["document"] = path
 	}
 
-	if imageMedia := evt.Message.GetImageMessage(); imageMedia != nil {
-		path, err := ExtractMedia(config.PathMedia, imageMedia)
+	if imageMessage := evt.Message.GetImageMessage(); imageMessage != nil {
+		path, err := ExtractMedia(config.PathMedia, imageMessage, GetInstanceManager().GetFirstInstance().Client)
 		if err != nil {
 			logrus.Errorf("Failed to download image from %s: %v", evt.Info.SourceString(), err)
 			return nil, pkgError.WebhookError(fmt.Sprintf("Failed to download image: %v", err))
@@ -107,8 +107,8 @@ func createPayload(evt *events.Message) (map[string]interface{}, error) {
 		body["order"] = orderMessage
 	}
 
-	if stickerMedia := evt.Message.GetStickerMessage(); stickerMedia != nil {
-		path, err := ExtractMedia(config.PathMedia, stickerMedia)
+	if stickerMessage := evt.Message.GetStickerMessage(); stickerMessage != nil {
+		path, err := ExtractMedia(config.PathMedia, stickerMessage, GetInstanceManager().GetFirstInstance().Client)
 		if err != nil {
 			logrus.Errorf("Failed to download sticker from %s: %v", evt.Info.SourceString(), err)
 			return nil, pkgError.WebhookError(fmt.Sprintf("Failed to download sticker: %v", err))
@@ -116,8 +116,8 @@ func createPayload(evt *events.Message) (map[string]interface{}, error) {
 		body["sticker"] = path
 	}
 
-	if videoMedia := evt.Message.GetVideoMessage(); videoMedia != nil {
-		path, err := ExtractMedia(config.PathMedia, videoMedia)
+	if videoMessage := evt.Message.GetVideoMessage(); videoMessage != nil {
+		path, err := ExtractMedia(config.PathMedia, videoMessage, GetInstanceManager().GetFirstInstance().Client)
 		if err != nil {
 			logrus.Errorf("Failed to download video from %s: %v", evt.Info.SourceString(), err)
 			return nil, pkgError.WebhookError(fmt.Sprintf("Failed to download video: %v", err))

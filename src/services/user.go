@@ -6,29 +6,227 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"strconv"
 	"time"
 
 	domainUser "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/user"
+	"github.com/aldinokemal/go-whatsapp-web-multidevice/pkg/database/models"
 	pkgError "github.com/aldinokemal/go-whatsapp-web-multidevice/pkg/error"
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/pkg/whatsapp"
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/validations"
 	"github.com/disintegration/imaging"
+	"github.com/gofiber/fiber/v2"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/appstate"
 	"go.mau.fi/whatsmeow/types"
+	"gorm.io/gorm"
 )
 
-type userService struct {
+// UserService handles user-related operations
+type UserService struct {
+	db     *gorm.DB
+	client *whatsmeow.Client
+}
+
+// NewUserServiceDB creates a new user service instance
+func NewUserServiceDB(db *gorm.DB) *UserService {
+	return &UserService{
+		db: db,
+	}
+}
+
+// NewUserService creates a new user service instance
+func NewUserService(client *whatsmeow.Client) *UserService {
+	return &UserService{
+		client: client,
+	}
+}
+
+// List returns all users for a company
+func (s *UserService) List(c *fiber.Ctx) error {
+	companyID := c.Locals("companyID").(int64)
+	users, err := models.GetActiveUsers(companyID)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": err.Error(),
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"users": users,
+	})
+}
+
+// Create creates a new user
+func (s *UserService) Create(c *fiber.Ctx) error {
+	companyID := c.Locals("companyID").(int64)
+
+	var input struct {
+		Name     string `json:"name"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	if err := c.BodyParser(&input); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": err.Error(),
+		})
+	}
+
+	user := &models.User{
+		CompanyID: companyID,
+		Name:      input.Name,
+		Email:     input.Email,
+		Password:  input.Password,
+		Active:    true,
+	}
+
+	if err := models.CreateUser(user); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": err.Error(),
+		})
+	}
+
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"user": user,
+	})
+}
+
+// Get returns a user by ID
+func (s *UserService) Get(c *fiber.Ctx) error {
+	companyID := c.Locals("companyID").(int64)
+	userID := c.Params("id")
+
+	userIDInt, err := strconv.ParseInt(userID, 10, 64)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid user ID format",
+		})
+	}
+
+	user, err := models.GetUserByID(userIDInt)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error": "User not found",
+		})
+	}
+
+	if user.CompanyID != companyID {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Access denied",
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"user": user,
+	})
+}
+
+// Update updates a user
+func (s *UserService) Update(c *fiber.Ctx) error {
+	companyID := c.Locals("companyID").(int64)
+	userID := c.Params("id")
+
+	userIDInt, err := strconv.ParseInt(userID, 10, 64)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid user ID format",
+		})
+	}
+
+	user, err := models.GetUserByID(userIDInt)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error": "User not found",
+		})
+	}
+
+	if user.CompanyID != companyID {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Access denied",
+		})
+	}
+
+	var input struct {
+		Name     string `json:"name"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
+		Active   bool   `json:"active"`
+	}
+
+	if err := c.BodyParser(&input); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": err.Error(),
+		})
+	}
+
+	user.Name = input.Name
+	user.Email = input.Email
+	if input.Password != "" {
+		user.Password = input.Password
+	}
+	user.Active = input.Active
+
+	if err := models.UpdateUser(user); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": err.Error(),
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"user": user,
+	})
+}
+
+// Delete deletes a user
+func (s *UserService) Delete(c *fiber.Ctx) error {
+	companyID := c.Locals("companyID").(int64)
+	userID := c.Params("id")
+
+	userIDInt, err := strconv.ParseInt(userID, 10, 64)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid user ID format",
+		})
+	}
+
+	user, err := models.GetUserByID(userIDInt)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error": "User not found",
+		})
+	}
+
+	if user.CompanyID != companyID {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Access denied",
+		})
+	}
+
+	if err := models.DeleteUser(user.ID); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": err.Error(),
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"message": "User deleted successfully",
+	})
+}
+
+// WhatsAppUserService handles WhatsApp user operations
+type WhatsAppUserService struct {
 	WaCli *whatsmeow.Client
 }
 
-func NewUserService(waCli *whatsmeow.Client) domainUser.IUserService {
-	return &userService{
+// NewWhatsAppUserService creates a new WhatsAppUserService instance
+func NewWhatsAppUserService(waCli *whatsmeow.Client) domainUser.IUserService {
+	return &WhatsAppUserService{
 		WaCli: waCli,
 	}
 }
 
-func (service userService) Info(ctx context.Context, request domainUser.InfoRequest) (response domainUser.InfoResponse, err error) {
+func (service WhatsAppUserService) Info(ctx context.Context, request domainUser.InfoRequest) (response domainUser.InfoResponse, err error) {
 	err = validations.ValidateUserInfo(ctx, request)
 	if err != nil {
 		return response, err
@@ -71,8 +269,7 @@ func (service userService) Info(ctx context.Context, request domainUser.InfoRequ
 	return response, nil
 }
 
-func (service userService) Avatar(ctx context.Context, request domainUser.AvatarRequest) (response domainUser.AvatarResponse, err error) {
-
+func (service WhatsAppUserService) Avatar(ctx context.Context, request domainUser.AvatarRequest) (response domainUser.AvatarResponse, err error) {
 	chanResp := make(chan domainUser.AvatarResponse)
 	chanErr := make(chan error)
 	waktu := time.Now()
@@ -115,10 +312,9 @@ func (service userService) Avatar(ctx context.Context, request domainUser.Avatar
 			}
 		}
 	}
-
 }
 
-func (service userService) MyListGroups(_ context.Context) (response domainUser.MyListGroupsResponse, err error) {
+func (service WhatsAppUserService) MyListGroups(_ context.Context) (response domainUser.MyListGroupsResponse, err error) {
 	whatsapp.MustLogin(service.WaCli)
 
 	groups, err := service.WaCli.GetJoinedGroups()
@@ -132,7 +328,7 @@ func (service userService) MyListGroups(_ context.Context) (response domainUser.
 	return response, nil
 }
 
-func (service userService) MyListNewsletter(_ context.Context) (response domainUser.MyListNewsletterResponse, err error) {
+func (service WhatsAppUserService) MyListNewsletter(_ context.Context) (response domainUser.MyListNewsletterResponse, err error) {
 	whatsapp.MustLogin(service.WaCli)
 
 	datas, err := service.WaCli.GetSubscribedNewsletters()
@@ -146,7 +342,7 @@ func (service userService) MyListNewsletter(_ context.Context) (response domainU
 	return response, nil
 }
 
-func (service userService) MyPrivacySetting(_ context.Context) (response domainUser.MyPrivacySettingResponse, err error) {
+func (service WhatsAppUserService) MyPrivacySetting(_ context.Context) (response domainUser.MyPrivacySettingResponse, err error) {
 	whatsapp.MustLogin(service.WaCli)
 
 	resp, err := service.WaCli.TryFetchPrivacySettings(true)
@@ -161,7 +357,7 @@ func (service userService) MyPrivacySetting(_ context.Context) (response domainU
 	return response, nil
 }
 
-func (service userService) MyListContacts(ctx context.Context) (response domainUser.MyListContactsResponse, err error) {
+func (service WhatsAppUserService) MyListContacts(ctx context.Context) (response domainUser.MyListContactsResponse, err error) {
 	whatsapp.MustLogin(service.WaCli)
 
 	contacts, err := service.WaCli.Store.Contacts.GetAllContacts()
@@ -179,7 +375,7 @@ func (service userService) MyListContacts(ctx context.Context) (response domainU
 	return response, nil
 }
 
-func (service userService) ChangeAvatar(ctx context.Context, request domainUser.ChangeAvatarRequest) (err error) {
+func (service WhatsAppUserService) ChangeAvatar(ctx context.Context, request domainUser.ChangeAvatarRequest) (err error) {
 	whatsapp.MustLogin(service.WaCli)
 
 	file, err := request.Avatar.Open()
@@ -233,8 +429,7 @@ func (service userService) ChangeAvatar(ctx context.Context, request domainUser.
 	return nil
 }
 
-// ChangePushName implements user.IUserService.
-func (service *userService) ChangePushName(ctx context.Context, request domainUser.ChangePushNameRequest) (err error) {
+func (service WhatsAppUserService) ChangePushName(ctx context.Context, request domainUser.ChangePushNameRequest) (err error) {
 	whatsapp.MustLogin(service.WaCli)
 
 	err = service.WaCli.SendAppState(appstate.BuildSettingPushName(request.PushName))

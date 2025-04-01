@@ -177,7 +177,6 @@ func runRest(_ *cobra.Command, _ []string) {
 		config.WhatsappLogLevel = "DEBUG"
 	}
 
-	// TODO: Init Rest App
 	//preparing folder if not exist
 	err := utils.CreateFolder(config.PathQrCode, config.PathSendItems, config.PathStorages, config.PathMedia)
 	if err != nil {
@@ -230,16 +229,16 @@ func runRest(_ *cobra.Command, _ []string) {
 		}))
 	}
 
-	db := whatsapp.InitWaDB()
-	cli := whatsapp.InitWaCLI(db)
+	// Initialize WhatsApp database
+	waDB := whatsapp.InitWaDB()
 
-	// Service
-	appService := services.NewAppService(cli, db)
-	sendService := services.NewSendService(cli, appService)
-	userService := services.NewUserService(cli)
-	messageService := services.NewMessageService(cli)
-	groupService := services.NewGroupService(cli)
-	newsletterService := services.NewNewsletterService(cli)
+	// Initialize services
+	appService := services.NewAppService(nil, waDB)
+	sendService := services.NewSendService(nil, appService)
+	userService := services.NewWhatsAppUserService(nil)
+	messageService := services.NewMessageService(nil)
+	groupService := services.NewGroupService(nil)
+	newsletterService := services.NewNewsletterService(nil)
 
 	// Rest
 	rest.InitRestApp(app, appService)
@@ -250,7 +249,7 @@ func runRest(_ *cobra.Command, _ []string) {
 	rest.InitRestNewsletter(app, newsletterService)
 
 	app.Get("/", func(c *fiber.Ctx) error {
-		return c.Render("views/index", fiber.Map{
+		return c.Render("views/index.html", fiber.Map{
 			"AppHost":        fmt.Sprintf("%s://%s", c.Protocol(), c.Hostname()),
 			"AppVersion":     config.AppVersion,
 			"BasicAuthToken": c.UserContext().Value(middleware.AuthorizationValue("BASIC_AUTH")),
@@ -262,11 +261,7 @@ func runRest(_ *cobra.Command, _ []string) {
 	websocket.RegisterRoutes(app, appService)
 	go websocket.RunHub()
 
-	// Set auto reconnect to whatsapp server after booting
-	go helpers.SetAutoConnectAfterBooting(appService)
-	// Set auto reconnect checking
-	go helpers.SetAutoReconnectChecking(cli)
-	// Start auto flush chat csv
+	// Start auto flush chat storage if enabled
 	if config.WhatsappChatStorage {
 		go helpers.StartAutoFlushChatStorage()
 	}
